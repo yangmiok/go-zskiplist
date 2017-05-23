@@ -5,12 +5,14 @@ package zskiplist
 import (
 	"math/rand"
 	"os"
+	"sort"
 	"testing"
+	"time"
 )
 
 var _ = os.Open
 
-const testRandSeed = 123456789
+var testRandSeed = time.Now().Unix()
 
 func init() {
 	rand.Seed(testRandSeed)
@@ -38,20 +40,6 @@ func (p *testPlayer) Uuid() uint64 {
 	return p.uid
 }
 
-func rangePerm(min, max int) []int {
-	if min > max {
-		panic("RangePerm: min greater than max")
-	}
-	if min == max {
-		return []int{min}
-	}
-	list := rand.Perm(max - min + 1)
-	for i := 0; i < len(list); i++ {
-		list[i] += min
-	}
-	return list
-}
-
 func makeTestData(count, score int) map[uint64]*testPlayer {
 	var set = make(map[uint64]*testPlayer, count)
 	var startID uint64 = 1234567890
@@ -67,22 +55,19 @@ func makeTestData(count, score int) map[uint64]*testPlayer {
 	return set
 }
 
-// make a skip list with sequential sorder scores, score equal to id
-func makeTestSkipList(count int, set map[uint64]*testPlayer) *ZSkipList {
-	var zsl = NewZSkipList(testRandSeed)
-	var list = rangePerm(1, count)
-	for _, n := range list {
-		obj := &testPlayer{
-			Level:    uint16(rand.Int() % 60),
-			Populace: uint32(n),
-			uid:      uint64(n),
-		}
-		set[obj.uid] = obj
-		if zsl.Insert(obj.Populace, obj) == nil {
-			panic("insert failed")
-		}
+func checkDuplicateObject(zsl *ZSkipList, t *testing.T) {
+	if zsl.Len() == 0 {
+		return
 	}
-	return zsl
+	var set = make(map[uint64]bool, zsl.Len())
+	zsl.Walk(func(rank int, obj RankInterface) bool {
+		if _, found := set[obj.Uuid()]; found {
+			var brief = obj.(*testPlayer)
+			t.Fatalf("Duplicate rank object found: %d, %d", rank, brief.Uuid())
+		}
+		set[obj.Uuid()] = true
+		return true
+	})
 }
 
 func dumpToFile(zsl *ZSkipList, filename string) {
@@ -90,36 +75,49 @@ func dumpToFile(zsl *ZSkipList, filename string) {
 	zsl.Dump(f)
 }
 
-func TestZSkipListInsert(t *testing.T) {
-	const units = 500000
+func mapToSlice(set map[uint64]*testPlayer) []*testPlayer {
+	var slice = make([]*testPlayer, 0, len(set))
+	for _, v := range set {
+		slice = append(slice, v)
+	}
+	return slice
+}
+
+func TestZSkipListInsertRemove(t *testing.T) {
+	const units = 50000
 	var set = makeTestData(units, 1000)
 	var zsl = NewZSkipList(testRandSeed)
-	for _, v := range set {
-		var node = zsl.Insert((v.Populace), v)
-		if node == nil {
-			t.Fatalf("insert item[%d-%d] failed", v.Populace, v.uid)
+
+	for i := 0; i < 100; i++ {
+		for _, v := range set {
+			if node := zsl.Insert(v.Populace, v); node == nil {
+				t.Fatalf("insert item[%d-%d] failed", v.Populace, v.uid)
+			}
 		}
-	}
-	if zsl.Len() != units {
-		t.Fatalf("skiplist elements count not equal")
-	}
-	t.Logf("skiplist %d item with height %d", units, zsl.Height())
-	for _, v := range set {
-		var node = zsl.Delete((v.Populace), v)
-		if node == nil {
-			t.Fatalf("delete item[%d-%d] failed", v.Populace, v.uid)
+		if zsl.Len() != units {
+			t.Fatalf("unexpected skiplist element count, %d != %d", zsl.Len(), units)
 		}
-		if brief := node.Obj.(*testPlayer); brief.uid != v.uid {
-			t.Fatalf("delete item, %d not equal to %d", brief.uid, v.uid)
+
+		checkDuplicateObject(zsl, t)
+
+		for _, v := range set {
+			var node = zsl.Delete((v.Populace), v)
+			if node == nil {
+				t.Fatalf("delete item[%d-%d] failed", v.Populace, v.uid)
+			}
+			if brief := node.Obj.(*testPlayer); brief.uid != v.uid {
+				t.Fatalf("delete item, %d not equal to %d", brief.uid, v.uid)
+			}
 		}
-	}
-	if zsl.Len() != 0 {
-		t.Fatalf("skiplist not empty")
+
+		if zsl.Len() != 0 {
+			t.Fatalf("skiplist not empty")
+		}
 	}
 }
 
-func TestZSkipListChangeInsert(t *testing.T) {
-	const units = 500000
+func TestZSkipListChangedInsert(t *testing.T) {
+	const units = 50000
 	var set = makeTestData(units, 100)
 	var zsl = NewZSkipList(testRandSeed)
 	for _, v := range set {
@@ -153,6 +151,9 @@ func TestZSkipListChangeInsert(t *testing.T) {
 			break
 		}
 	}
+	if zsl.Len() != units {
+		t.Fatalf("unexpected skiplist element count")
+	}
 	for _, v := range set {
 		var node = zsl.Delete((v.Populace), v)
 		if node == nil {
@@ -168,45 +169,95 @@ func TestZSkipListChangeInsert(t *testing.T) {
 }
 
 func TestZSkipListGetRank(t *testing.T) {
-	const units = 500000
-	var set = make(map[uint64]*testPlayer, units)
-	var zsl = makeTestSkipList(units, set)
-	//dumpToFile(zsl, "zskiplist-rank.dat")
-	var expectRank = int32(1)
-	for i := units; i > 0; i-- {
-		var obj = set[uint64(i)]
-		var rank = zsl.GetRank(obj.Populace, obj)
-		if rank == 0 {
-			t.Fatalf("get rank[%d-%d] failed", obj.Populace, obj.uid)
-		}
-		if rank != expectRank {
-			t.Fatalf("item[%d-%d] expect rank %d, got %d", obj.Populace, obj.uid, expectRank, rank)
-		}
-		expectRank++
-	}
-}
-
-func TestZSkipListElementByRank(t *testing.T) {
-	const units = 500000
+	const units = 20000
 	var set = makeTestData(units, 1000)
 	var zsl = NewZSkipList(testRandSeed)
 	for _, v := range set {
-		var node = zsl.Insert((v.Populace), v)
+		var node = zsl.Insert(v.Populace, v)
 		if node == nil {
 			t.Fatalf("insert item[%d-%d] failed", v.Populace, v.uid)
 		}
 	}
+
+	for i := 0; i < 100; i++ {
+		var count = units / 2 // change half of the list
+		for _, v := range set {
+			var oldScore = v.Populace
+			if node := zsl.Delete(oldScore, v); node == nil {
+				t.Fatalf("delete rank item[%d-%d] fail", v.uid, v.Populace)
+				break
+			}
+			v.Populace += uint32(rand.Int31() % 100)
+			if node := zsl.Insert(v.Populace, v); node == nil {
+				t.Fatalf("insert rank item[%d-%d] fail", v.uid, v.Populace)
+				break
+			}
+			count--
+			if count == 0 {
+				break
+			}
+		}
+
+		// rank by sort package
+		var ranks = mapToSlice(set)
+		sort.Slice(ranks, func(i, j int) bool {
+			return ranks[i].IsGreaterThan(ranks[j])
+		})
+
+		for i, v := range ranks {
+			var rank = zsl.GetRank(v.Populace, v)
+			if rank != int32(i+1) {
+				t.Fatalf("%d not equal at rank %d", v.Uuid(), i+1)
+				break
+			}
+		}
+	}
+}
+
+func TestZSkipListElementByRank(t *testing.T) {
+	const units = 20000
+	var set = makeTestData(units, 1000)
+	var zsl = NewZSkipList(testRandSeed)
 	for _, v := range set {
-		var rank = zsl.GetRank((v.Populace), v)
-		if rank <= 0 {
-			t.Fatalf("get rank of item[%d-%d] failed", v.Populace, v.uid)
-		}
-		var node = zsl.GetElementByRank(rank)
+		var node = zsl.Insert(v.Populace, v)
 		if node == nil {
-			t.Fatalf("get object by rank[%d] failed", rank)
+			t.Fatalf("insert item[%d-%d] failed", v.Populace, v.uid)
 		}
-		if node.Obj != v {
-			t.Fatalf("rank[%d] object[%d-%d] not equal", rank, v.Populace, v.uid)
+	}
+	for i := 0; i < 100; i++ {
+		var count = units / 2 // change half of the list
+		for _, v := range set {
+			var oldScore = v.Populace
+			if node := zsl.Delete(oldScore, v); node == nil {
+				t.Fatalf("delete rank item[%d-%d] fail", v.uid, v.Populace)
+				break
+			}
+			v.Populace += uint32(rand.Int31() % 100)
+			if node := zsl.Insert(v.Populace, v); node == nil {
+				t.Fatalf("insert rank item[%d-%d] fail", v.uid, v.Populace)
+				break
+			}
+			count--
+			if count == 0 {
+				break
+			}
+		}
+
+		// rank by sort package
+		var ranks = mapToSlice(set)
+		sort.Slice(ranks, func(i, j int) bool {
+			return ranks[i].IsGreaterThan(ranks[j])
+		})
+
+		for i, v := range ranks {
+			var rank = int32(i + 1)
+			var node = zsl.GetElementByRank(rank)
+			if node == nil {
+				t.Fatalf("get object by rank[%d] failed", rank)
+			}
+			if node.Obj.Uuid() != v.Uuid() {
+				t.Fatalf("rank[%d] object[%d-%d] not equal", rank, v.Populace, v.uid)
+			}
 		}
 	}
 }
@@ -230,34 +281,40 @@ func BenchmarkZSkipListInsert(b *testing.B) {
 func BenchmarkZSkipListRemove(b *testing.B) {
 	b.StopTimer()
 	const units = 1000000
-	var set = make(map[uint64]*testPlayer, units)
-	var zsl = makeTestSkipList(units, set)
+	var set = makeTestData(units, 1000)
+	var zsl = NewZSkipList(testRandSeed)
+	for _, v := range set {
+		var node = zsl.Insert(v.Populace, v)
+		if node == nil {
+			b.Fatalf("insert item[%d-%d] failed", v.Populace, v.uid)
+		}
+	}
 	b.StartTimer()
 	for i := 1; i < b.N; i++ {
-		var obj = set[uint64(i)]
-		var node = zsl.Delete(obj.Populace, obj)
-		if node == nil {
-			b.Fatalf("delete item[%d-%d] fail", obj.Populace, obj.uid)
+		var obj *testPlayer
+		for _, v := range set {
+			obj = v
+			break
 		}
-		if i <= units {
-			b.Fatalf("delete item[%d-%d] failed", obj.Populace, obj.uid)
-		}
+		zsl.Delete(obj.Populace, obj)
 	}
 }
 
 func BenchmarkZSkipListGetRank(b *testing.B) {
 	b.StopTimer()
 	const units = 1000000
-	var set = make(map[uint64]*testPlayer, units)
-	var zsl = makeTestSkipList(units, set)
+	var set = makeTestData(units, 1000)
+	var zsl = NewZSkipList(testRandSeed)
+	for _, v := range set {
+		var node = zsl.Insert(v.Populace, v)
+		if node == nil {
+			b.Fatalf("insert item[%d-%d] failed", v.Populace, v.uid)
+		}
+	}
 	b.StartTimer()
 	for i := 1; i < b.N; i++ {
-		var obj = set[uint64(rand.Int()%units)+1]
-		if obj != nil {
-			var rank = zsl.GetRank(obj.Populace, obj)
-			if rank <= 0 && i <= units {
-				b.Fatalf("get rank of item[%d-%d] failed", obj.uid, obj.Populace)
-			}
+		for _, v := range set {
+			zsl.GetRank(v.Populace, v)
 		}
 	}
 }
@@ -265,11 +322,23 @@ func BenchmarkZSkipListGetRank(b *testing.B) {
 func BenchmarkZSkipListGetElementByRank(b *testing.B) {
 	b.StopTimer()
 	const units = 1000000
-	var set = make(map[uint64]*testPlayer, units)
-	var zsl = makeTestSkipList(units, set)
+	var set = makeTestData(units, 1000)
+	var zsl = NewZSkipList(testRandSeed)
+	for _, v := range set {
+		var node = zsl.Insert(v.Populace, v)
+		if node == nil {
+			b.Fatalf("insert item[%d-%d] failed", v.Populace, v.uid)
+		}
+	}
+	// rank by sort package
+	var ranks = mapToSlice(set)
+	sort.Slice(ranks, func(i, j int) bool {
+		return ranks[i].IsGreaterThan(ranks[j])
+	})
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		var rank = int32(rand.Int() % zsl.Len())
-		zsl.GetElementByRank(rank)
+		for i, _ := range ranks {
+			zsl.GetElementByRank(int32(i + 1))
+		}
 	}
 }
