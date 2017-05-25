@@ -13,10 +13,10 @@ zskiplist里的数据使用降序排列。
 ``` go
 type RankInterface interface {
 
-    //这个对象是否大于另一个对象
+	//这个对象是否大于另一个对象
 	IsGreaterThan(RankInterface) bool
 
-    //这个对象的唯一ID
+	//这个对象的唯一ID
 	Uuid() uint64
 }
 ```
@@ -74,12 +74,12 @@ func main() {
 	//获取角色的排行信息
 	var rank = zsl.GetRank(p1.score, p1)
 
-    //根据排行获取角色信息
+	//根据排行获取角色信息
 	var node = zsl.GetElementByRank(rank)
 
-    //遍历整个zskiplist，lambda返回false迭代结束
-	zsl.Walk(func(rank int, v RankInterface) bool {
-		// v is at rank
+	//遍历整个zskiplist，lambda返回false迭代结束
+	zsl.Walk(func(rank int, v zskiplist.RankInterface) bool {
+		// v is at position rank
 		return true
 	})
 
@@ -87,8 +87,9 @@ func main() {
 	zsl.Delete(p1.score, p1)
 	p1.score += 100
 
-    //分数更改后再次插入zskiplist
+	//分数更改后再次插入zskiplist
 	zsl.Insert(p1.score, p1)
 }
+
 
 ```
