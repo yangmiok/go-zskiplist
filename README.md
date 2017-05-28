@@ -8,16 +8,13 @@ a golang implementation of redis zskiplist
 
 zskiplist里的数据使用降序排列。
 
-一个可以排行的对象需要满足下面两个接口:
+一个可以排行的对象需要满足下面的接口:
 
 ``` go
 type RankInterface interface {
 
-	//这个对象是否大于另一个对象
-	IsGreaterThan(RankInterface) bool
-
-	//这个对象的唯一ID
-	Uuid() uint64
+	//与另一个对象比较，相等返回0，小于返回-1，大于返回1
+	CompareTo(RankInterface) int
 }
 ```
 
@@ -42,19 +39,37 @@ type Player struct {
 	score uint32
 }
 
-func (p *Player) IsGreaterThan(rhs RankInterface) bool {
-	var b = rhs.(*Player)
-	if p.score == b.score {
-		if p.level == b.level {
-			return p.id < p.id //分数、等级都相同，使用id排
-		}
-		return p.level > b.level //分数相同，使用等级排
-	}
-	return p.score > b.score
+func (p *testPlayer) Uid() uint64 {
+	return p.uid
 }
 
-func (p *Player) Uuid() uint64 {
-	return p.id
+func (p *Player) CompareTo(rhs RankInterface) bool {
+	var b = rhs.(*testPlayer)
+	if p.uid == b.uid {
+		return 0
+	}
+	switch {
+	case p.Populace < b.Populace:
+		return -1
+	case p.Populace > b.Populace:
+		return 1
+	default: // 分数相同，使用等级排
+		switch {
+		case p.Level < b.Level:
+			return -1
+		case p.Level > b.Level:
+			return 1
+		default: // 分数、等级都相同，使用id排
+			switch {
+			case p.uid < b.uid:
+				return 1
+			case p.uid > b.uid:
+				return -1
+			default:
+				return 0
+			}
+		}
+	}
 }
 
 func main() {
@@ -78,17 +93,21 @@ func main() {
 	var node = zsl.GetElementByRank(rank)
 
 	//遍历整个zskiplist，lambda返回false迭代结束
-	zsl.Walk(func(rank int, v zskiplist.RankInterface) bool {
+	zsl.Walk(true, func(rank int, v zskiplist.RankInterface) bool {
 		// v is at position rank
 		return true
 	})
 
 	//删除角色信息
-	zsl.Delete(p1.score, p1)
+	if node := zsl.Delete(p1.score, p1); node == nil {
+        // error handling
+    }
 	p1.score += 100
 
 	//分数更改后再次插入zskiplist
-	zsl.Insert(p1.score, p1)
+	if node := zsl.Insert(p1.score, p1); node == nil {
+        // error handling
+    }
 }
 
 

@@ -7,7 +7,7 @@
 // pointers being only at "level 1". This allows to traverse the list
 // from tail to head.
 //
-// https://github.com/antirez/redis/blob/unstable/src/t_zset.c
+// https://github.com/antirez/redis/blob/3.2/src/t_zset.c
 
 package zskiplist
 
@@ -18,37 +18,39 @@ import (
 )
 
 const (
-	ZSKIPLIST_MAXLEVEL = 12     // Should be enough for 2^32 elements
+	ZSKIPLIST_MAXLEVEL = 12     // Should be enough
 	ZSKIPLIST_P        = 250    // Skiplist P = 1/4, in thousandth
 	RAND_MAX           = 0x7FFF //
 )
 
-//A type that satisfies RankInterface can be ranked in a ranking list
+//A type that satisfies RankInterface can be ranked in a zskiplist
 type RankInterface interface {
-	// IsGreaterThan compare whether a rank object is greater than other
-	IsGreaterThan(RankInterface) bool
 
-	// Uuid is the unique id of each rank object
-	Uuid() uint64
+	// CompareTo compare two rankable objects.
+	// Return value:
+	//    positive if s1 > s2.
+	//    negative if s1 < s2.
+	//    0 if s1 and s2 are exactly the same binary string.
+	CompareTo(RankInterface) int
 }
 
 // each level of list node
 type zskipListLevel struct {
 	forward *ZSkipListNode // link to next node
-	span    int32          // node range across next
+	span    int            // node range across next
 }
 
 // list node
 type ZSkipListNode struct {
-	score    uint32
 	level    []zskipListLevel
 	backward *ZSkipListNode
+	Score    uint32
 	Obj      RankInterface
 }
 
 func newZSkipListNode(level int, score uint32, obj RankInterface) *ZSkipListNode {
 	return &ZSkipListNode{
-		score: score,
+		Score: score,
 		Obj:   obj,
 		level: make([]zskipListLevel, level),
 	}
@@ -59,7 +61,7 @@ func (n *ZSkipListNode) Next() *ZSkipListNode {
 	return n.level[0].forward
 }
 
-// ZSkipList with descend order
+// ZSkipList with ascend order
 type ZSkipList struct {
 	head   *ZSkipListNode // header node
 	tail   *ZSkipListNode // tail node, this means the least item
@@ -117,7 +119,7 @@ func (zsl *ZSkipList) TailNode() *ZSkipListNode {
 // Insert insert an object to skiplist with score
 func (zsl *ZSkipList) Insert(score uint32, obj RankInterface) *ZSkipListNode {
 	var update [ZSKIPLIST_MAXLEVEL]*ZSkipListNode
-	var rank [ZSKIPLIST_MAXLEVEL]int32
+	var rank [ZSKIPLIST_MAXLEVEL]int
 
 	var x = zsl.head
 	for i := zsl.level - 1; i >= 0; i-- {
@@ -126,9 +128,9 @@ func (zsl *ZSkipList) Insert(score uint32, obj RankInterface) *ZSkipListNode {
 			rank[i] = rank[i+1]
 		}
 		for x.level[i].forward != nil &&
-			(x.level[i].forward.score > score ||
-				(x.level[i].forward.score == score &&
-					x.level[i].forward.Obj.IsGreaterThan(obj))) {
+			(x.level[i].forward.Score < score ||
+				(x.level[i].forward.Score == score &&
+					x.level[i].forward.Obj.CompareTo(obj) < 0)) {
 			rank[i] += x.level[i].span
 			x = x.level[i].forward
 		}
@@ -136,13 +138,13 @@ func (zsl *ZSkipList) Insert(score uint32, obj RankInterface) *ZSkipListNode {
 	}
 	// we assume the key is not already inside, since we allow duplicated
 	// scores, and the re-insertion of score and redis object should never
-	// happen since the caller of zslInsert() should test in the hash table
-	// if the element is already inside or not.
+	// happen since the caller should test in the hash table  if the element
+	// is already inside or not.
 	var level = zsl.randLevel()
 	if level > zsl.level {
 		for i := zsl.level; i < level; i++ {
 			update[i] = zsl.head
-			update[i].level[i].span = int32(zsl.length)
+			update[i].level[i].span = zsl.length
 		}
 		zsl.level = level
 	}
@@ -151,11 +153,11 @@ func (zsl *ZSkipList) Insert(score uint32, obj RankInterface) *ZSkipListNode {
 		x.level[i].forward = update[i].level[i].forward
 		update[i].level[i].forward = x
 
-		//update span covered by update[i] as x is inserted here
+		// update span covered by update[i] as x is inserted here
 		x.level[i].span = update[i].level[i].span - (rank[0] - rank[i])
 		update[i].level[i].span = (rank[0] - rank[i]) + 1
 	}
-	//increment span for untouched levels
+	// increment span for untouched levels
 	for i := level; i < zsl.level; i++ {
 		update[i].level[i].span++
 	}
@@ -197,9 +199,9 @@ func (zsl *ZSkipList) Delete(score uint32, obj RankInterface) *ZSkipListNode {
 	var x = zsl.head
 	for i := zsl.level - 1; i >= 0; i-- {
 		for x.level[i].forward != nil &&
-			(x.level[i].forward.score > score ||
-				(x.level[i].forward.score == score &&
-					x.level[i].forward.Obj.IsGreaterThan(obj))) {
+			(x.level[i].forward.Score < score ||
+				(x.level[i].forward.Score == score &&
+					x.level[i].forward.Obj.CompareTo(obj) < 0)) {
 			x = x.level[i].forward
 		}
 		update[i] = x
@@ -208,68 +210,72 @@ func (zsl *ZSkipList) Delete(score uint32, obj RankInterface) *ZSkipListNode {
 	// We may have multiple elements with the same score, what we need
 	// is to find the element with both the right score and object.
 	x = x.level[0].forward
-	if x != nil && score == x.score && x.Obj.Uuid() == obj.Uuid() {
+	if x != nil && score == x.Score && x.Obj.CompareTo(obj) == 0 {
 		zsl.deleteNode(x, update[0:])
 		return x
 	}
 	return nil // not found
 }
 
-// Returns if there is a part of the zset is in range [max,min]
-func (zsl *ZSkipList) IsInRange(scoreMax, scoreMin uint32) bool {
-	if scoreMin > scoreMax {
+// Returns if there is a part of the zset is in range.
+func (zsl *ZSkipList) IsInRange(min, max uint32) bool {
+	// Test for ranges that will always be empty.
+	if min > max {
 		return false
 	}
-	var x = zsl.tail
-	if x == nil || x.score > scoreMax {
+	var x = zsl.tail // maximum
+	if x == nil || x.Score < min {
 		return false
 	}
-	x = zsl.head.level[0].forward
-	if x == nil || x.score < scoreMin {
+	x = zsl.head.level[0].forward // minimum
+	if x == nil || x.Score > max {
 		return false
 	}
 	return true
 }
 
-// Find the first node that is contained in the specified range [max, min].
-// Returns NULL when no element is contained in the range.
-func (zsl *ZSkipList) FirstInRange(scoreMax, scoreMin uint32) *ZSkipListNode {
+// Find the first node that is contained in the specified range.
+// Returns nil when no element is contained in the range.
+func (zsl *ZSkipList) FirstInRange(min, max uint32) *ZSkipListNode {
 	// If everything is out of range, return early.
-	if !zsl.IsInRange(scoreMin, scoreMax) {
+	if !zsl.IsInRange(min, max) {
 		return nil
 	}
 	var x = zsl.head
 	for i := zsl.level - 1; i >= 0; i-- {
 		// Go foward while out of range
-		for x.level[i].forward != nil && x.level[i].forward.score > scoreMax {
+		for x.level[i].forward != nil && x.level[i].forward.Score < min {
 			x = x.level[i].forward
 		}
 	}
+
+	//This is an inner range, so the next node cannot be NULL.
 	x = x.level[0].forward
-	// Check is score >= min
-	if x.score < scoreMin {
+
+	// Check is score <= max
+	if x.Score > max {
 		return nil
 	}
 	return x
 }
 
-// Find the last node that is contained in the specified range [max, min].
-// Returns NULL when no element is contained in the range.
-func (zsl *ZSkipList) LastInRange(scoreMax, scoreMin uint32) *ZSkipListNode {
+// Find the last node that is contained in the specified range.
+// Returns nil when no element is contained in the range.
+func (zsl *ZSkipList) LastInRange(min, max uint32) *ZSkipListNode {
 	// If everything is out of range, return early.
-	if !zsl.IsInRange(scoreMin, scoreMax) {
+	if !zsl.IsInRange(min, max) {
 		return nil
 	}
 	var x = zsl.head
 	for i := zsl.level - 1; i >= 0; i-- {
 		// Go forward while in range
-		for x.level[i].forward != nil && x.level[i].forward.score >= scoreMin {
+		for x.level[i].forward != nil && x.level[i].forward.Score <= max {
 			x = x.level[i].forward
 		}
 	}
 
 	// Check if score <= max
-	if x.score > scoreMax {
+	if x.Score > max {
 		return nil
 	}
 	return x
@@ -277,11 +283,11 @@ func (zsl *ZSkipList) LastInRange(scoreMax, scoreMin uint32) *ZSkipListNode {
 
 // Delete all the elements with score between [max, min] from the skiplist.
 // Min and max are inclusive, so a score >= min || score <= max is deleted.
-func (zsl *ZSkipList) DeleteRangeByScore(scoreMax, scoreMin uint32) uint32 {
+func (zsl *ZSkipList) DeleteRangeByScore(min, max uint32) uint32 {
 	var update [ZSKIPLIST_MAXLEVEL]*ZSkipListNode
 	var x = zsl.head
 	for i := zsl.level - 1; i >= 0; i-- {
-		for x.level[i].forward != nil && x.level[i].forward.score <= scoreMax {
+		for x.level[i].forward != nil && x.level[i].forward.Score <= min {
 			x = x.level[i].forward
 		}
 		update[i] = x
@@ -292,7 +298,7 @@ func (zsl *ZSkipList) DeleteRangeByScore(scoreMax, scoreMin uint32) uint32 {
 
 	// Delete nodes while in range
 	var removed uint32
-	for x != nil && x.score >= scoreMin {
+	for x != nil && x.Score <= max {
 		var next = x.level[0].forward
 		zsl.deleteNode(x, update[0:])
 		removed++
@@ -303,12 +309,12 @@ func (zsl *ZSkipList) DeleteRangeByScore(scoreMax, scoreMin uint32) uint32 {
 
 // Delete all the elements with rank between start and end from the skiplist.
 // Start and end are inclusive. Note that start and end need to be 1-based
-func (zsl *ZSkipList) DeleteRangeByRank(start, end int32) uint32 {
+func (zsl *ZSkipList) DeleteRangeByRank(start, end int) uint32 {
 	var update [ZSKIPLIST_MAXLEVEL]*ZSkipListNode
 	var tranversed, removed uint32
 	var x = zsl.head
 	for i := zsl.level - 1; i >= 0; i-- {
-		for x.level[i].forward != nil && (int32(tranversed)+x.level[i].span < start) {
+		for x.level[i].forward != nil && (int(tranversed)+x.level[i].span < start) {
 			tranversed += uint32(x.level[i].span)
 			x = x.level[i].forward
 		}
@@ -316,7 +322,7 @@ func (zsl *ZSkipList) DeleteRangeByRank(start, end int32) uint32 {
 	}
 	tranversed++
 	x = x.level[0].forward
-	for x != nil && int32(tranversed) <= end {
+	for x != nil && int(tranversed) <= end {
 		var next = x.level[0].forward
 		zsl.deleteNode(x, update[0:])
 		removed++
@@ -329,21 +335,20 @@ func (zsl *ZSkipList) DeleteRangeByRank(start, end int32) uint32 {
 // GetRank Find the rank for an element by both score and key.
 // Returns 0 when the element cannot be found, rank otherwise.
 // Note that the rank is 1-based due to the span of zsl->header to the first element.
-func (zsl *ZSkipList) GetRank(score uint32, obj RankInterface) int32 {
-	var rank int32 = 0
+func (zsl *ZSkipList) GetRank(score uint32, obj RankInterface) int {
+	var rank = 0
 	var x = zsl.head
 	for i := zsl.level - 1; i >= 0; i-- {
-		// find first item greater than or equal to `obj`)
 		for x.level[i].forward != nil &&
-			(x.level[i].forward.score > score ||
-				(x.level[i].forward.score == score &&
-					!obj.IsGreaterThan(x.level[i].forward.Obj))) {
+			(x.level[i].forward.Score < score ||
+				(x.level[i].forward.Score == score &&
+					x.level[i].forward.Obj.CompareTo(obj) <= 0)) {
 			rank += x.level[i].span
 			x = x.level[i].forward
 		}
 
 		// x might be equal to zsl->header, so test if obj is non-nil
-		if x.Obj != nil && x.Obj.Uuid() == obj.Uuid() {
+		if x.Obj != nil && x.Obj.CompareTo(obj) == 0 {
 			return rank
 		}
 	}
@@ -352,8 +357,8 @@ func (zsl *ZSkipList) GetRank(score uint32, obj RankInterface) int32 {
 
 // GetElementByRank Finds an element by its rank.
 // The rank argument needs to be 1-based.
-func (zsl *ZSkipList) GetElementByRank(rank int32) *ZSkipListNode {
-	var tranversed int32 = 0
+func (zsl *ZSkipList) GetElementByRank(rank int) *ZSkipListNode {
+	var tranversed int = 0
 	var x = zsl.head
 	for i := zsl.level - 1; i >= 0; i-- {
 		for x.level[i].forward != nil && (tranversed+x.level[i].span <= rank) {
@@ -370,17 +375,17 @@ func (zsl *ZSkipList) GetElementByRank(rank int32) *ZSkipListNode {
 // GetTopRankRange get top score of N elements
 func (zsl *ZSkipList) GetTopRankValueRange(n int) []RankInterface {
 	var ranks = make([]RankInterface, 0, n)
-	var x = zsl.head.level[0].forward
+	var x = zsl.tail
 	for x != nil && n > 0 {
 		ranks = append(ranks, x.Obj)
 		n--
-		x = x.level[0].forward
+		x = x.backward
 	}
 	return ranks
 }
 
 // GetNearRange get range near to rank
-func (zsl *ZSkipList) GetNearValueRange(rank int32, up, down int) []RankInterface {
+func (zsl *ZSkipList) GetNearValueRange(rank, up, down int) []RankInterface {
 	var target = zsl.GetElementByRank(rank)
 	if target == nil {
 		return nil
@@ -403,15 +408,27 @@ func (zsl *ZSkipList) GetNearValueRange(rank int32, up, down int) []RankInterfac
 }
 
 // Walk iterate list by `fn` with max `loop`
-func (zsl *ZSkipList) Walk(fn func(int, RankInterface) bool) {
-	var rank = 1
-	var node = zsl.head.level[0].forward
-	for node != nil {
-		if !fn(rank, node.Obj) {
-			break
+func (zsl *ZSkipList) Walk(startTail bool, fn func(int, RankInterface) bool) {
+	if startTail { // from tail to head
+		var rank = 1
+		var node = zsl.tail
+		for node != nil {
+			if !fn(rank, node.Obj) {
+				break
+			}
+			node = node.backward
+			rank++
 		}
-		rank++
-		node = node.level[0].forward
+	} else { // from head to tail
+		var rank = zsl.length
+		var node = zsl.head.level[0].forward
+		for node != nil {
+			if !fn(rank, node.Obj) {
+				break
+			}
+			rank--
+			node = node.level[0].forward
+		}
 	}
 }
 
@@ -457,9 +474,19 @@ func (zsl *ZSkipList) Dump(w io.Writer) {
 	fmt.Fprintf(w, "\n")
 }
 
+type uider interface {
+	Uid() uint64
+}
+
 func (zsl *ZSkipList) dumpNode(w io.Writer, node *ZSkipListNode) {
 	var line bytes.Buffer
-	n, _ := fmt.Fprintf(w, "<%d %6d> ", node.Obj.Uuid(), node.score)
+	var uuid string
+	if u, ok := node.Obj.(uider); ok {
+		uuid = fmt.Sprintf("%s", u.Uid())
+	} else {
+		uuid = fmt.Sprintf("%p", node.Obj)
+	}
+	n, _ := fmt.Fprintf(w, "<%s %6d> ", uuid, node.Score)
 	prePadding(&line, n)
 	for i := 0; i < zsl.level; i++ {
 		if i < len(node.level) {
@@ -481,7 +508,7 @@ func shouldLinkVertical(head, node *ZSkipListNode, level int) bool {
 	if node.backward == nil { // first element
 		return head.level[level].span >= 1
 	}
-	var tranversed int32 = 0
+	var tranversed = 0
 	var prev *ZSkipListNode
 	var x = node.backward
 	for x != nil {
