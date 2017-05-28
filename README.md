@@ -100,15 +100,14 @@ func main() {
 
 	//删除角色信息
 	if node := zsl.Delete(p1.score, p1); node == nil {
-        // error handling
-    }
+		// error handling
+	}
 	p1.score += 100
 
 	//分数更改后再次插入zskiplist
 	if node := zsl.Insert(p1.score, p1); node == nil {
-        // error handling
-    }
+		// error handling
+	}
 }
-
 
 ```
