@@ -6,7 +6,7 @@ a golang implementation of redis zskiplist
 
 ## Usage
 
-zskiplist里的数据使用降序排列。
+zskiplist里的数据使用升序排列。
 
 一个可以排行的对象需要满足下面的接口:
 
