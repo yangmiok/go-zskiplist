@@ -1,7 +1,7 @@
 # go-zskiplist
 a golang implementation of redis zskiplist
 
-一个redis里[zskiplist](https://github.com/antirez/redis/blob/unstable/src/t_zset.c)的golang实现，用于实现游戏项目里的排行榜功能。
+一个redis里[zskiplist](https://github.com/antirez/redis/blob/3.2/src/t_zset.c)的golang实现，用于实现游戏项目里的排行榜功能。
 
 
 ## Usage
@@ -40,30 +40,30 @@ type Player struct {
 }
 
 func (p *testPlayer) Uid() uint64 {
-	return p.uid
+	return p.id
 }
 
 func (p *Player) CompareTo(rhs RankInterface) bool {
 	var b = rhs.(*testPlayer)
-	if p.uid == b.uid {
+	if p.id == b.id {
 		return 0
 	}
 	switch {
-	case p.Populace < b.Populace:
+	case p.score < b.score:
 		return -1
-	case p.Populace > b.Populace:
+	case p.score > b.score:
 		return 1
 	default: // 分数相同，使用等级排
 		switch {
-		case p.Level < b.Level:
+		case p.level < b.level:
 			return -1
-		case p.Level > b.Level:
+		case p.level > b.level:
 			return 1
 		default: // 分数、等级都相同，使用id排
 			switch {
-			case p.uid < b.uid:
+			case p.id < b.id:
 				return 1
-			case p.uid > b.uid:
+			case p.id > b.id:
 				return -1
 			default:
 				return 0
