@@ -28,16 +28,16 @@ type RankInterface interface {
 
 	// CompareTo compare two rankable objects.
 	// Return value:
-	//    positive if s1 > s2.
-	//    negative if s1 < s2.
-	//    0 if s1 and s2 are exactly the same binary string.
+	//    positive if a > b.
+	//    negative if a < b.
+	//    0 if a and b are exactly the same.
 	CompareTo(RankInterface) int
 }
 
 // each level of list node
 type zskipListLevel struct {
 	forward *ZSkipListNode // link to next node
-	span    int            // node range across next
+	span    int            // node # between this and forward link
 }
 
 // list node
@@ -64,7 +64,7 @@ func (n *ZSkipListNode) Next() *ZSkipListNode {
 // ZSkipList with ascend order
 type ZSkipList struct {
 	head   *ZSkipListNode // header node
-	tail   *ZSkipListNode // tail node, this means the least item
+	tail   *ZSkipListNode // tail node, this means the largest item
 	seed   uint64         // random number generator seed
 	length int            // count of items
 	level  int            //
@@ -78,7 +78,8 @@ func NewZSkipList(seed int64) *ZSkipList {
 	}
 }
 
-// a simple linear congruential random number generator
+// A simple linear congruential random number generator
+// more details see https://en.wikipedia.org/wiki/Linear_congruential_generator
 func (zsl *ZSkipList) randNext() uint32 {
 	zsl.seed = zsl.seed*214013 + 2531011
 	return uint32(zsl.seed>>16) & RAND_MAX
