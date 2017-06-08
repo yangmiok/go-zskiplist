@@ -483,7 +483,7 @@ func (zsl *ZSkipList) dumpNode(w io.Writer, node *ZSkipListNode) {
 	var line bytes.Buffer
 	var uuid string
 	if u, ok := node.Obj.(uider); ok {
-		uuid = fmt.Sprintf("%s", u.Uid())
+		uuid = fmt.Sprintf("%d", u.Uid())
 	} else {
 		uuid = fmt.Sprintf("%p", node.Obj)
 	}
