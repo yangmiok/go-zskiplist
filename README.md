@@ -13,8 +13,8 @@ zskiplist里的数据使用升序排列。
 ``` go
 type RankInterface interface {
 
-	//与另一个对象比较，相等返回0，小于返回-1，大于返回1
-	CompareTo(RankInterface) int
+	//每个排行对象的唯一标识
+	Uuid() uint64
 }
 ```
 
@@ -39,38 +39,10 @@ type Player struct {
 	score uint32
 }
 
-func (p *testPlayer) Uid() uint64 {
+func (p *testPlayer) Uuid() uint64 {
 	return p.id
 }
 
-func (p *Player) CompareTo(rhs RankInterface) bool {
-	var b = rhs.(*testPlayer)
-	if p.id == b.id {
-		return 0
-	}
-	switch {
-	case p.score < b.score:
-		return -1
-	case p.score > b.score:
-		return 1
-	default: // 分数相同，使用等级排
-		switch {
-		case p.level < b.level:
-			return -1
-		case p.level > b.level:
-			return 1
-		default: // 分数、等级都相同，使用id排
-			switch {
-			case p.id < b.id:
-				return 1
-			case p.id > b.id:
-				return -1
-			default:
-				return 0
-			}
-		}
-	}
-}
 
 func main() {
 	var zsl = zskiplist.NewZSkipList(time.Now().Unix())
