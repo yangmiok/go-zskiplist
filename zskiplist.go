@@ -15,12 +15,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/rand"
 )
 
 const (
-	ZSKIPLIST_MAXLEVEL = 12     // Should be enough
-	ZSKIPLIST_P        = 250    // Skiplist P = 1/4, in thousandth
-	RAND_MAX           = 0x7FFF //
+	ZSKIPLIST_MAXLEVEL = 12   // Should be enough
+	ZSKIPLIST_P        = 0.25 // Skiplist P = 1/4
 )
 
 //A type that satisfies RankInterface can be ranked in a zskiplist
@@ -42,16 +42,16 @@ type zskipListLevel struct {
 
 // list node
 type ZSkipListNode struct {
-	level    []zskipListLevel
-	backward *ZSkipListNode
-	Score    uint32
 	Obj      RankInterface
+	Score    uint32
+	backward *ZSkipListNode
+	level    []zskipListLevel
 }
 
 func newZSkipListNode(level int, score uint32, obj RankInterface) *ZSkipListNode {
 	return &ZSkipListNode{
-		Score: score,
 		Obj:   obj,
+		Score: score,
 		level: make([]zskipListLevel, level),
 	}
 }
@@ -78,23 +78,25 @@ func NewZSkipList(seed int64) *ZSkipList {
 	}
 }
 
-// A simple linear congruential random number generator
-// more details see https://en.wikipedia.org/wiki/Linear_congruential_generator
-func (zsl *ZSkipList) randNext() uint32 {
-	zsl.seed = zsl.seed*214013 + 2531011
-	return uint32(zsl.seed>>16) & RAND_MAX
-}
-
 // Returns a random level for the new skiplist node we are going to create.
 // The return value of this function is between 1 and ZSKIPLIST_MAXLEVEL
 // (both inclusive), with a powerlaw-alike distribution where higher
 // levels are less likely to be returned.
 func (zsl *ZSkipList) randLevel() int {
 	var level = 1
-	for level < ZSKIPLIST_MAXLEVEL && zsl.randNext() < uint32(RAND_MAX*ZSKIPLIST_P/1000) {
-		level++
+	for {
+		var seed = rand.Uint32() & 0xFFFF
+		if float32(seed) < ZSKIPLIST_P*0xFFFF {
+			level++
+		} else {
+			break
+		}
 	}
-	return level
+	if level < ZSKIPLIST_MAXLEVEL {
+		return level
+	} else {
+		return ZSKIPLIST_MAXLEVEL
+	}
 }
 
 // Len return # of items in list
@@ -107,16 +109,6 @@ func (zsl *ZSkipList) Height() int {
 	return zsl.level
 }
 
-// HeadNode return the node after head
-func (zsl *ZSkipList) HeadNode() *ZSkipListNode {
-	return zsl.head.level[0].forward
-}
-
-// TailNode return the tail node
-func (zsl *ZSkipList) TailNode() *ZSkipListNode {
-	return zsl.tail
-}
-
 // Insert insert an object to skiplist with score
 func (zsl *ZSkipList) Insert(score uint32, obj RankInterface) *ZSkipListNode {
 	var update [ZSKIPLIST_MAXLEVEL]*ZSkipListNode
@@ -127,6 +119,8 @@ func (zsl *ZSkipList) Insert(score uint32, obj RankInterface) *ZSkipListNode {
 		// store rank that is crossed to reach the insert position
 		if i != zsl.level-1 {
 			rank[i] = rank[i+1]
+		} else {
+			rank[i] = 0
 		}
 		for x.level[i].forward != nil &&
 			(x.level[i].forward.Score < score ||
@@ -144,6 +138,7 @@ func (zsl *ZSkipList) Insert(score uint32, obj RankInterface) *ZSkipListNode {
 	var level = zsl.randLevel()
 	if level > zsl.level {
 		for i := zsl.level; i < level; i++ {
+			rank[i] = 0
 			update[i] = zsl.head
 			update[i].level[i].span = zsl.length
 		}
