@@ -34,7 +34,7 @@ import (
 
 //简单的角色信息示例
 type rankPlayer struct {
-	id    uint64
+	id    uint64 //唯一的角色ID
 	name  string
 	level uint32
 	score uint32
