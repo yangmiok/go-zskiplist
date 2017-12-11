@@ -223,121 +223,6 @@ func (zsl *ZSkipList) Delete(score uint32, obj RankInterface) *ZSkipListNode {
 	return nil // not found
 }
 
-// Returns if there is a part of the zset is in range.
-func (zsl *ZSkipList) IsInRange(min, max uint32) bool {
-	// Test for ranges that will always be empty.
-	if min > max {
-		return false
-	}
-	var x = zsl.tail // maximum
-	if x == nil || x.Score < min {
-		return false
-	}
-	x = zsl.head.level[0].forward // minimum
-	if x == nil || x.Score > max {
-		return false
-	}
-	return true
-}
-
-// Find the first node that is contained in the specified range.
-// Returns nil when no element is contained in the range.
-func (zsl *ZSkipList) FirstInRange(min, max uint32) *ZSkipListNode {
-	// If everything is out of range, return early.
-	if !zsl.IsInRange(min, max) {
-		return nil
-	}
-	var x = zsl.head
-	for i := zsl.level - 1; i >= 0; i-- {
-		// Go foward while out of range
-		for x.level[i].forward != nil && x.level[i].forward.Score < min {
-			x = x.level[i].forward
-		}
-	}
-
-	//This is an inner range, so the next node cannot be NULL.
-	x = x.level[0].forward
-
-	// Check is score <= max
-	if x.Score > max {
-		return nil
-	}
-	return x
-}
-
-// Find the last node that is contained in the specified range.
-// Returns nil when no element is contained in the range.
-func (zsl *ZSkipList) LastInRange(min, max uint32) *ZSkipListNode {
-	// If everything is out of range, return early.
-	if !zsl.IsInRange(min, max) {
-		return nil
-	}
-	var x = zsl.head
-	for i := zsl.level - 1; i >= 0; i-- {
-		// Go forward while in range
-		for x.level[i].forward != nil && x.level[i].forward.Score <= max {
-			x = x.level[i].forward
-		}
-	}
-
-	// Check if score <= max
-	if x.Score > max {
-		return nil
-	}
-	return x
-}
-
-// Delete all the elements with score between [max, min] from the skiplist.
-// Min and max are inclusive, so a score >= min || score <= max is deleted.
-func (zsl *ZSkipList) DeleteRangeByScore(min, max uint32) uint32 {
-	var update [ZSKIPLIST_MAXLEVEL]*ZSkipListNode
-	var x = zsl.head
-	for i := zsl.level - 1; i >= 0; i-- {
-		for x.level[i].forward != nil && x.level[i].forward.Score <= min {
-			x = x.level[i].forward
-		}
-		update[i] = x
-	}
-
-	//Current node is the last with score < or <= min
-	x = x.level[0].forward
-
-	// Delete nodes while in range
-	var removed uint32
-	for x != nil && x.Score <= max {
-		var next = x.level[0].forward
-		zsl.deleteNode(x, update[0:])
-		removed++
-		x = next
-	}
-	return removed
-}
-
-// Delete all the elements with rank between start and end from the skiplist.
-// Start and end are inclusive. Note that start and end need to be 1-based
-func (zsl *ZSkipList) DeleteRangeByRank(start, end int) uint32 {
-	var update [ZSKIPLIST_MAXLEVEL]*ZSkipListNode
-	var tranversed, removed uint32
-	var x = zsl.head
-	for i := zsl.level - 1; i >= 0; i-- {
-		for x.level[i].forward != nil && (int(tranversed)+x.level[i].span < start) {
-			tranversed += uint32(x.level[i].span)
-			x = x.level[i].forward
-		}
-		update[i] = x
-	}
-	tranversed++
-	x = x.level[0].forward
-	for x != nil && int(tranversed) <= end {
-		var next = x.level[0].forward
-		zsl.deleteNode(x, update[0:])
-		removed++
-		tranversed++
-		x = next
-	}
-	return removed
-}
-
 // GetRank Find the rank for an element by both score and key.
 // Returns 0 when the element cannot be found, rank otherwise.
 // Note that the rank is 1-based due to the span of zsl->header to the first element.
@@ -464,9 +349,11 @@ func (zsl *ZSkipList) Dump(w io.Writer) {
 	line.WriteTo(w)
 
 	// dump list
+	var count = 0
 	x = x.level[0].forward
 	for x != nil {
-		zsl.dumpNode(w, x)
+		count++
+		zsl.dumpNode(w, x, count)
 		if len(x.level) > 0 {
 			x = x.level[0].forward
 		}
@@ -480,10 +367,10 @@ func (zsl *ZSkipList) Dump(w io.Writer) {
 	fmt.Fprintf(w, "\n")
 }
 
-func (zsl *ZSkipList) dumpNode(w io.Writer, node *ZSkipListNode) {
+func (zsl *ZSkipList) dumpNode(w io.Writer, node *ZSkipListNode, count int) {
 	var line bytes.Buffer
 	var uuid = fmt.Sprintf("%d", node.Obj.Uuid())
-	n, _ := fmt.Fprintf(w, "<%s %6d> ", uuid, node.Score)
+	n, _ := fmt.Fprintf(w, "<%s %6d %4d> ", uuid, node.Score, count)
 	prePadding(&line, n)
 	for i := 0; i < zsl.level; i++ {
 		if i < len(node.level) {
